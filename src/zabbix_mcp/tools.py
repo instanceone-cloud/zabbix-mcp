@@ -332,6 +332,133 @@ TOOLS: List[Tool] = [
             "required": ["eventid"],
         },
     ),
+    # Phase 2A: Item & Metric Management
+    Tool(
+        name="create_item",
+        description="Create a new monitored item (metric) on a host",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hostid": {"type": "string", "description": "Host ID"},
+                "name": {"type": "string", "description": "Item display name (e.g., 'CPU Load')"},
+                "key_": {"type": "string", "description": "Item key (e.g., 'system.cpu.load')"},
+                "type": {"type": "string", "description": "Item type: 0=Zabbix agent, 2=SNMP, 3=IPMI, 7=SSH, 10=External, 11=Database, 12=JMX, 13=SNMP trap, 15=Dependent"},
+                "value_type": {"type": "string", "description": "Data type: 0=float, 1=string, 2=log, 3=unsigned int, 4=text"},
+                "interval": {"type": "string", "description": "Polling interval (e.g., '1m', '5m', '1h')"},
+                "units": {"type": "string", "description": "Units (e.g., 'Bps', 'B', '%')"},
+                "description": {"type": "string", "description": "Item description"},
+            },
+            "required": ["hostid", "name", "key_", "type", "value_type"],
+        },
+    ),
+    Tool(
+        name="update_item",
+        description="Update an existing monitored item configuration",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "itemid": {"type": "string", "description": "Item ID"},
+                "name": {"type": "string", "description": "New display name (optional)"},
+                "key_": {"type": "string", "description": "New item key (optional)"},
+                "type": {"type": "string", "description": "New item type (optional)"},
+                "value_type": {"type": "string", "description": "New data type (optional)"},
+                "interval": {"type": "string", "description": "New polling interval (optional)"},
+                "units": {"type": "string", "description": "New units (optional)"},
+                "description": {"type": "string", "description": "New description (optional)"},
+                "enabled": {"type": "string", "description": "Enable (0=disabled, 1=enabled)"},
+            },
+            "required": ["itemid"],
+        },
+    ),
+    Tool(
+        name="delete_item",
+        description="Delete a monitored item and its history",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "itemid": {"type": "string", "description": "Item ID to delete"},
+            },
+            "required": ["itemid"],
+        },
+    ),
+    # Phase 2B: Template Management
+    Tool(
+        name="create_template",
+        description="Create a new reusable monitoring template",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Template name (e.g., 'Linux Nginx Monitoring')"},
+                "description": {"type": "string", "description": "Template description"},
+                "group_ids": {"type": "array", "items": {"type": "string"}, "description": "Template group IDs (e.g., ['1'])"},
+            },
+            "required": ["name"],
+        },
+    ),
+    Tool(
+        name="update_template",
+        description="Update template properties (name, description, groups)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "templateid": {"type": "string", "description": "Template ID"},
+                "name": {"type": "string", "description": "New name (optional)"},
+                "description": {"type": "string", "description": "New description (optional)"},
+                "group_ids": {"type": "array", "items": {"type": "string"}, "description": "New group IDs (optional)"},
+            },
+            "required": ["templateid"],
+        },
+    ),
+    Tool(
+        name="delete_template",
+        description="Delete a template. Unlinks from all hosts first.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "templateid": {"type": "string", "description": "Template ID to delete"},
+            },
+            "required": ["templateid"],
+        },
+    ),
+    # Phase 2C: Template Link Management
+    Tool(
+        name="unlink_template",
+        description="Remove a template from a host",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hostid": {"type": "string", "description": "Host ID"},
+                "templateid": {"type": "string", "description": "Template ID"},
+                "clean": {"type": "string", "description": "Clean up items: 0=no, 1=yes (default: 0)"},
+            },
+            "required": ["hostid", "templateid"],
+        },
+    ),
+    Tool(
+        name="link_multiple_templates",
+        description="Attach multiple templates to a host in one operation",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hostid": {"type": "string", "description": "Host ID"},
+                "template_ids": {"type": "array", "items": {"type": "string"}, "description": "List of template IDs to link"},
+            },
+            "required": ["hostid", "template_ids"],
+        },
+    ),
+    # Phase 2D: Host Group Management
+    Tool(
+        name="create_host_group",
+        description="Create a new host group for organizing hosts",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Group name (e.g., 'Production Servers')"},
+                "description": {"type": "string", "description": "Optional group description"},
+            },
+            "required": ["name"],
+        },
+    ),
 ]
 
 
@@ -1283,6 +1410,357 @@ def handle_acknowledge_event(client: ZabbixClient, args: Dict[str, Any]) -> str:
         return f"❌ Error: {e}"
 
 
+# Phase 2A: Item & Metric Management Handlers
+
+def handle_create_item(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle create_item tool - Create new monitored metric."""
+    try:
+        hostid = args.get("hostid")
+        name = args.get("name")
+        key_ = args.get("key_")
+        type_ = args.get("type")
+        value_type = args.get("value_type")
+        interval = args.get("interval", "60")
+        units = args.get("units", "")
+        description = args.get("description", "")
+        
+        if not all([hostid, name, key_, type_, value_type]):
+            return "❌ Error: hostid, name, key_, type, and value_type are required"
+        
+        item_params = {
+            "hostid": hostid,
+            "name": name,
+            "key_": key_,
+            "type": str(type_),
+            "value_type": str(value_type),
+            "delay": interval,  # Delay = polling interval
+        }
+        
+        if units:
+            item_params["units"] = units
+        if description:
+            item_params["description"] = description
+        
+        result = client.call("item.create", item_params)
+        
+        if not result:
+            return f"❌ Failed to create item on host {hostid}"
+        
+        itemid = result[0] if isinstance(result, list) else result.get("itemids", [None])[0]
+        
+        type_map = {
+            "0": "Zabbix agent", "2": "SNMP", "3": "IPMI",
+            "7": "SSH", "10": "External", "11": "Database", "12": "JMX"
+        }
+        value_map = {"0": "float", "1": "string", "2": "log", "3": "unsigned int", "4": "text"}
+        
+        return f"""✅ Item Created!
+
+📊 Item ID: {itemid}
+🖥️ Host ID: {hostid}
+📝 Name: {name}
+🔑 Key: {key_}
+📈 Type: {type_map.get(str(type_), 'Unknown')}
+💾 Value Type: {value_map.get(str(value_type), 'Unknown')}
+⏱️ Polling: {interval}
+📋 Units: {units or '(none)'}
+
+Next: Wait 1-2 minutes for data collection to start"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_update_item(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle update_item tool - Modify item configuration."""
+    try:
+        itemid = args.get("itemid")
+        if not itemid:
+            return "❌ Error: itemid is required"
+        
+        update_params = {"itemid": itemid}
+        changes = []
+        
+        if "name" in args:
+            update_params["name"] = args["name"]
+            changes.append(f"name → {args['name']}")
+        
+        if "key_" in args:
+            update_params["key_"] = args["key_"]
+            changes.append(f"key → {args['key_']}")
+        
+        if "type" in args:
+            update_params["type"] = str(args["type"])
+            type_map = {"0": "Agent", "2": "SNMP", "3": "IPMI", "7": "SSH", "12": "JMX"}
+            changes.append(f"type → {type_map.get(str(args['type']), 'Unknown')}")
+        
+        if "value_type" in args:
+            update_params["value_type"] = str(args["value_type"])
+            value_map = {"0": "float", "1": "string", "2": "log", "3": "uint", "4": "text"}
+            changes.append(f"value_type → {value_map.get(str(args['value_type']), 'Unknown')}")
+        
+        if "interval" in args:
+            update_params["delay"] = str(args["interval"])
+            changes.append(f"interval → {args['interval']}")
+        
+        if "units" in args:
+            update_params["units"] = args["units"]
+            changes.append(f"units → {args['units']}")
+        
+        if "description" in args:
+            update_params["description"] = args["description"]
+            changes.append("description updated")
+        
+        if "enabled" in args:
+            update_params["status"] = str(args["enabled"])
+            status_text = "enabled" if args["enabled"] == 0 else "disabled"
+            changes.append(f"status → {status_text}")
+        
+        if not changes:
+            return "❌ Error: at least one property must be specified"
+        
+        result = client.call("item.update", update_params)
+        
+        if not result:
+            return f"❌ Failed to update item {itemid}"
+        
+        return f"""✅ Item Updated!
+
+📊 Item ID: {itemid}
+📝 Changes: {', '.join(changes)}
+⏰ Effect: Next poll will use new config"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_delete_item(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle delete_item tool - Remove monitored item."""
+    try:
+        itemid = args.get("itemid")
+        if not itemid:
+            return "❌ Error: itemid is required"
+        
+        result = client.call("item.delete", [itemid])
+        
+        if not result:
+            return f"❌ Failed to delete item {itemid}"
+        
+        return f"""✅ Item Deleted!
+
+📊 Item ID: {itemid}
+⚠️ Status: Removed from monitoring
+📊 Data: Historical data retained (can be purged separately)
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+# Phase 2B: Template Management Handlers
+
+def handle_create_template(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle create_template tool - Create new reusable template."""
+    try:
+        name = args.get("name")
+        description = args.get("description", "")
+        group_ids = args.get("group_ids", ["1"])  # Default: Templates group
+        
+        if not name:
+            return "❌ Error: name is required"
+        
+        if isinstance(group_ids, str):
+            group_ids = [group_ids]
+        
+        template_params = {
+            "host": name,  # Zabbix API uses 'host' field for template hostname
+            "groups": [{"groupid": gid} for gid in group_ids],
+        }
+        
+        if description:
+            template_params["description"] = description
+        
+        result = client.call("template.create", template_params)
+        
+        if not result:
+            return f"❌ Failed to create template '{name}'"
+        
+        templateid = result[0] if isinstance(result, list) else result.get("templateids", [None])[0]
+        
+        return f"""✅ Template Created!
+
+📋 Template ID: {templateid}
+📝 Name: {name}
+📖 Description: {description or '(none)'}
+👥 Groups: {len(group_ids)} group(s)
+
+Next: Link to hosts with link_template or link_multiple_templates"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_update_template(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle update_template tool - Modify template properties."""
+    try:
+        templateid = args.get("templateid")
+        if not templateid:
+            return "❌ Error: templateid is required"
+        
+        update_params = {"templateid": templateid}
+        changes = []
+        
+        if "name" in args:
+            update_params["host"] = args["name"]
+            changes.append(f"name → {args['name']}")
+        
+        if "description" in args:
+            update_params["description"] = args["description"]
+            changes.append("description updated")
+        
+        if "group_ids" in args:
+            group_ids = args["group_ids"]
+            if isinstance(group_ids, str):
+                group_ids = [group_ids]
+            update_params["groups"] = [{"groupid": gid} for gid in group_ids]
+            changes.append(f"groups → {len(group_ids)} group(s)")
+        
+        if not changes:
+            return "❌ Error: at least one property (name, description, or group_ids) must be specified"
+        
+        result = client.call("template.update", update_params)
+        
+        if not result:
+            return f"❌ Failed to update template {templateid}"
+        
+        return f"""✅ Template Updated!
+
+📋 Template ID: {templateid}
+📝 Changes: {', '.join(changes)}"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_delete_template(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle delete_template tool - Remove template."""
+    try:
+        templateid = args.get("templateid")
+        if not templateid:
+            return "❌ Error: templateid is required"
+        
+        result = client.call("template.delete", [templateid])
+        
+        if not result:
+            return f"❌ Failed to delete template {templateid}"
+        
+        return f"""✅ Template Deleted!
+
+📋 Template ID: {templateid}
+⚠️ Status: Removed from system
+🔗 Linked hosts: Automatically unlinked
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+# Phase 2C: Template Link Management Handlers
+
+def handle_unlink_template(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle unlink_template tool - Remove template from host."""
+    try:
+        hostid = args.get("hostid")
+        templateid = args.get("templateid")
+        clean = args.get("clean", 0)
+        
+        if not hostid or not templateid:
+            return "❌ Error: hostid and templateid are required"
+        
+        update_params = {
+            "hostid": hostid,
+            "templates_clear": [templateid],
+        }
+        
+        if clean == 1 or clean == "1":
+            update_params["templates_clear_templates"] = "yes"
+        
+        result = client.call("host.update", update_params)
+        
+        if not result:
+            return f"❌ Failed to unlink template {templateid} from host {hostid}"
+        
+        clean_text = "Items cleaned up" if clean else "Items retained"
+        
+        return f"""✅ Template Unlinked!
+
+🖥️ Host ID: {hostid}
+📋 Template ID: {templateid}
+🧹 Cleanup: {clean_text}
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_link_multiple_templates(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle link_multiple_templates tool - Attach multiple templates."""
+    try:
+        hostid = args.get("hostid")
+        template_ids = args.get("template_ids", [])
+        
+        if not hostid or not template_ids:
+            return "❌ Error: hostid and template_ids are required"
+        
+        if isinstance(template_ids, str):
+            template_ids = [template_ids]
+        
+        update_params = {
+            "hostid": hostid,
+            "templates": [{"templateid": tid} for tid in template_ids],
+        }
+        
+        result = client.call("host.update", update_params)
+        
+        if not result:
+            return f"❌ Failed to link templates to host {hostid}"
+        
+        return f"""✅ Templates Linked!
+
+🖥️ Host ID: {hostid}
+📋 Templates: {len(template_ids)} template(s) linked
+⏰ Action: Immediate
+🕐 Data Collection: Starts in ~1-2 minutes"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+# Phase 2D: Host Group Management Handlers
+
+def handle_create_host_group(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle create_host_group tool - Create new host group."""
+    try:
+        name = args.get("name")
+        description = args.get("description", "")
+        
+        if not name:
+            return "❌ Error: name is required"
+        
+        group_params = {"name": name}
+        if description:
+            group_params["description"] = description
+        
+        result = client.call("hostgroup.create", group_params)
+        
+        if not result:
+            return f"❌ Failed to create host group '{name}'"
+        
+        groupid = result[0] if isinstance(result, list) else result.get("groupids", [None])[0]
+        
+        return f"""✅ Host Group Created!
+
+👥 Group ID: {groupid}
+📝 Name: {name}
+📖 Description: {description or '(none)'}
+
+Next: Assign hosts to this group with update_host"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
 # Tool handler registry
 TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "get_hosts": handle_get_hosts,
@@ -1318,6 +1796,19 @@ TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "disable_trigger": handle_disable_trigger,
     "delete_trigger": handle_delete_trigger,
     "acknowledge_event": handle_acknowledge_event,
+    # Phase 2A: Items & Metrics
+    "create_item": handle_create_item,
+    "update_item": handle_update_item,
+    "delete_item": handle_delete_item,
+    # Phase 2B: Template Management
+    "create_template": handle_create_template,
+    "update_template": handle_update_template,
+    "delete_template": handle_delete_template,
+    # Phase 2C: Template Links
+    "unlink_template": handle_unlink_template,
+    "link_multiple_templates": handle_link_multiple_templates,
+    # Phase 2D: Host Groups
+    "create_host_group": handle_create_host_group,
 }
 
 
