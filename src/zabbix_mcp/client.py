@@ -34,6 +34,8 @@ class ZabbixClient:
         self.token: Optional[str] = None
         self.session = requests.Session()
         self.session.verify = verify_ssl
+        if not verify_ssl:
+            logger.warning("SSL certificate verification is disabled for Zabbix API client")
         self._request_id = 0
     
     def _get_request_id(self) -> int:
@@ -124,6 +126,10 @@ class ZabbixClient:
             
         except RequestException as e:
             raise ZabbixAPIError(f"Connection error: {e}")
+
+    def api_call(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """Backward-compatible alias used by user-management helpers."""
+        return self.call(method, params)
     
     def get_hosts(self, **kwargs) -> List[Dict[str, Any]]:
         """

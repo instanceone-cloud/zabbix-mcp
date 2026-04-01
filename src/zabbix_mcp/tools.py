@@ -1,12 +1,13 @@
 """MCP Tool definitions and handlers."""
 
-import json
 from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 
 from mcp.types import Tool
 
 from .client import ZabbixClient
+
+MAX_HOSTNAME_LENGTH = 255
 
 # Tool definitions
 TOOLS: List[Tool] = [
@@ -594,10 +595,21 @@ def handle_get_hosts(client: ZabbixClient, args: Dict[str, Any]) -> str:
         return f"Error: {e}"
 
 
+def _validated_limit(raw_limit: Any, default: int) -> int:
+    """Validate and normalize list/query limits."""
+    if raw_limit is None:
+        return default
+    if not isinstance(raw_limit, int):
+        raise ValueError("limit must be an integer")
+    if raw_limit < 1 or raw_limit > 1000:
+        raise ValueError("limit must be between 1 and 1000")
+    return raw_limit
+
+
 def handle_get_problems(client: ZabbixClient, args: Dict[str, Any]) -> str:
     """Handle get_problems tool."""
     try:
-        limit = args.get("limit", 50)
+        limit = _validated_limit(args.get("limit"), 50)
         problems = client.get_problems(limit=limit)
         
         if not problems:
@@ -620,7 +632,7 @@ def handle_get_problems(client: ZabbixClient, args: Dict[str, Any]) -> str:
 def handle_get_triggers(client: ZabbixClient, args: Dict[str, Any]) -> str:
     """Handle get_triggers tool."""
     try:
-        limit = args.get("limit", 50)
+        limit = _validated_limit(args.get("limit"), 50)
         triggers = client.get_triggers(limit=limit)
         
         if not triggers:
@@ -642,7 +654,7 @@ def handle_get_triggers(client: ZabbixClient, args: Dict[str, Any]) -> str:
 def handle_get_events(client: ZabbixClient, args: Dict[str, Any]) -> str:
     """Handle get_events tool."""
     try:
-        limit = args.get("limit", 20)
+        limit = _validated_limit(args.get("limit"), 20)
         events = client.get_events(limit=limit)
         
         if not events:
@@ -669,6 +681,10 @@ def handle_get_host_details(client: ZabbixClient, args: Dict[str, Any]) -> str:
         hostname = args.get("hostname")
         if not hostname:
             return "Error: hostname required"
+        if not isinstance(hostname, str):
+            return "Error: hostname must be a string"
+        if len(hostname) > MAX_HOSTNAME_LENGTH:
+            return "Error: hostname is too long"
         
         host = client.get_host_by_name(hostname)
         if not host:
@@ -884,7 +900,7 @@ def handle_check_host_interface_availability(client: ZabbixClient, args: Dict[st
         output += f"Status: {result['status'].upper()}\n"
         
         if result["interfaces"]:
-            output += f"Interfaces:\n"
+            output += "Interfaces:\n"
             for iface in result["interfaces"]:
                 output += f"  • {iface.get('ip')}:{iface.get('port')}\n"
         
@@ -922,7 +938,7 @@ def handle_create_host(client: ZabbixClient, args: Dict[str, Any]) -> str:
         
         hostid = host_result[0] if isinstance(host_result, list) else host_result.get("hostids", [None])[0]
         if not hostid:
-            return f"❌ Failed to get hostid from creation response"
+            return "❌ Failed to get hostid from creation response"
         
         # Step 2: Add interface
         interface_params = {

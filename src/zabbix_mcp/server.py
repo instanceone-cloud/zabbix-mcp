@@ -41,7 +41,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     except ZabbixAPIError as e:
         return [TextContent(type="text", text=f"Zabbix API error: {e}")]
     except Exception as e:
-        return [TextContent(type="text", text=f"Error: {e}")]
+        logger.exception("Unexpected error while executing tool '%s': %s", name, e)
+        return [TextContent(type="text", text="Error executing tool")]
 
 
 async def main_async():

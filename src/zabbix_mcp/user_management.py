@@ -5,6 +5,7 @@ Provides tools for creating users, managing roles, and checking permissions.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from .client import ZabbixClient
@@ -15,6 +16,22 @@ class UserManagement:
     
     def __init__(self, client: ZabbixClient):
         self.client = client
+
+    @staticmethod
+    def _validate_password(password: str, username: Optional[str], surname: Optional[str] = None) -> List[str]:
+        """Validate password quality and forbidden substrings."""
+        validation_errors: List[str] = []
+        if len(password) < 8:
+            validation_errors.append("Password must be at least 8 characters long")
+        if not re.search(r"\d", password):
+            validation_errors.append("Password must contain at least one number")
+        if not re.search(r"[^A-Za-z0-9]", password):
+            validation_errors.append("Password must contain at least one special character")
+        if username and username.lower() in password.lower():
+            validation_errors.append("Password cannot contain username")
+        if surname and surname.lower() in password.lower():
+            validation_errors.append("Password cannot contain surname")
+        return validation_errors
     
     def create_user(
         self,
@@ -49,15 +66,7 @@ class UserManagement:
             - Role must exist in Zabbix
             - Username must be unique
         """
-        validation_errors = []
-        
-        # Validate password doesn't contain username
-        if username.lower() in password.lower():
-            validation_errors.append("Password cannot contain username")
-        
-        # Validate password doesn't contain surname
-        if surname and surname.lower() in password.lower():
-            validation_errors.append("Password cannot contain surname")
+        validation_errors = self._validate_password(password, username, surname)
         
         if validation_errors:
             return {
@@ -178,17 +187,18 @@ class UserManagement:
                     }
                 
                 # Validate new password
-                if username and username.lower() in password.lower():
+                if not username:
                     return {
                         "success": False,
-                        "message": "New password cannot contain username",
+                        "message": "Cannot validate password without username",
                         "changes_made": []
                     }
-                
-                if current_surname and current_surname.lower() in password.lower():
+
+                password_errors = self._validate_password(password, username, current_surname)
+                if password_errors:
                     return {
                         "success": False,
-                        "message": "New password cannot contain surname",
+                        "message": f"New password validation failed: {', '.join(password_errors)}",
                         "changes_made": []
                     }
                 
@@ -224,7 +234,7 @@ class UserManagement:
             if result and "userids" in result:
                 return {
                     "success": True,
-                    "message": f"User updated successfully",
+                    "message": "User updated successfully",
                     "changes_made": changes
                 }
             else:
@@ -395,7 +405,7 @@ class UserManagement:
             
             if roles:
                 return roles[0]["roleid"]
-        except:
+        except Exception:
             pass
         
         return None
