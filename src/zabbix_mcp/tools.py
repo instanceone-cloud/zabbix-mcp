@@ -7,6 +7,8 @@ from mcp.types import Tool
 
 from .client import ZabbixClient
 
+MAX_HOSTNAME_LENGTH = 255
+
 # Tool definitions
 TOOLS: List[Tool] = [
     Tool(
@@ -681,7 +683,7 @@ def handle_get_host_details(client: ZabbixClient, args: Dict[str, Any]) -> str:
             return "Error: hostname required"
         if not isinstance(hostname, str):
             return "Error: hostname must be a string"
-        if len(hostname) > 255:
+        if len(hostname) > MAX_HOSTNAME_LENGTH:
             return "Error: hostname is too long"
         
         host = client.get_host_by_name(hostname)

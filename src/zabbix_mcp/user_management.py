@@ -18,7 +18,7 @@ class UserManagement:
         self.client = client
 
     @staticmethod
-    def _validate_password(password: str, username: str, surname: Optional[str] = None) -> List[str]:
+    def _validate_password(password: str, username: Optional[str], surname: Optional[str] = None) -> List[str]:
         """Validate password quality and forbidden substrings."""
         validation_errors: List[str] = []
         if len(password) < 8:
@@ -27,7 +27,7 @@ class UserManagement:
             validation_errors.append("Password must contain at least one number")
         if not re.search(r"[^A-Za-z0-9]", password):
             validation_errors.append("Password must contain at least one special character")
-        if username.lower() in password.lower():
+        if username and username.lower() in password.lower():
             validation_errors.append("Password cannot contain username")
         if surname and surname.lower() in password.lower():
             validation_errors.append("Password cannot contain surname")
@@ -198,7 +198,7 @@ class UserManagement:
                 if password_errors:
                     return {
                         "success": False,
-                        "message": "New password validation failed",
+                        "message": f"New password validation failed: {', '.join(password_errors)}",
                         "changes_made": []
                     }
                 
