@@ -168,6 +168,83 @@ TOOLS: List[Tool] = [
             "required": ["name", "hostids", "start_time", "duration_seconds"],
         },
     ),
+    # Phase 1A: Host Lifecycle Management
+    Tool(
+        name="update_host",
+        description="Update host properties (name, status, groups, etc.)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hostid": {"type": "string", "description": "Host ID"},
+                "name": {"type": "string", "description": "New display name (optional)"},
+                "status": {"type": "string", "description": "Status: 0=enabled (monitored), 1=disabled (not monitored)"},
+                "group_ids": {"type": "array", "items": {"type": "string"}, "description": "List of host group IDs (optional)"},
+                "description": {"type": "string", "description": "Host description (optional)"},
+            },
+            "required": ["hostid"],
+        },
+    ),
+    Tool(
+        name="enable_host",
+        description="Enable monitoring for a host (set status=0)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hostid": {"type": "string", "description": "Host ID to enable"},
+            },
+            "required": ["hostid"],
+        },
+    ),
+    Tool(
+        name="disable_host",
+        description="Disable monitoring for a host (set status=1). Host will stop collecting data.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hostid": {"type": "string", "description": "Host ID to disable"},
+            },
+            "required": ["hostid"],
+        },
+    ),
+    Tool(
+        name="delete_host",
+        description="Delete a host from Zabbix monitoring. Removes all associated items, triggers, and history.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "hostid": {"type": "string", "description": "Host ID to delete"},
+                "cascade": {"type": "boolean", "description": "Cascade delete (removes all related data). Default: true"},
+            },
+            "required": ["hostid"],
+        },
+    ),
+    Tool(
+        name="update_host_interface",
+        description="Update a host interface (IP address, port, authentication, etc.)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "interfaceid": {"type": "string", "description": "Interface ID"},
+                "ip_address": {"type": "string", "description": "New IP address (optional)"},
+                "port": {"type": "string", "description": "New port (optional)"},
+                "useip": {"type": "string", "description": "Use IP (0=DNS, 1=IP). Default: 1"},
+                "dns": {"type": "string", "description": "DNS name (if useip=0)"},
+                "bulk": {"type": "string", "description": "Bulk value (0=not bulk, 1=bulk). Default: 0"},
+            },
+            "required": ["interfaceid"],
+        },
+    ),
+    Tool(
+        name="delete_host_interface",
+        description="Delete a host interface. Host must have at least one interface remaining.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "interfaceid": {"type": "string", "description": "Interface ID to delete"},
+            },
+            "required": ["interfaceid"],
+        },
+    ),
 ]
 
 
@@ -704,6 +781,197 @@ Effect: Data collection paused, alerts suppressed during window."""
         return f"❌ Error: {e}"
 
 
+# Phase 1A: Host Lifecycle Management Handlers
+
+def handle_update_host(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle update_host tool - Modify host properties."""
+    try:
+        hostid = args.get("hostid")
+        if not hostid:
+            return "❌ Error: hostid is required"
+        
+        update_params = {"hostid": hostid}
+        changes = []
+        
+        if "name" in args:
+            update_params["name"] = args["name"]
+            changes.append(f"name → {args['name']}")
+        
+        if "status" in args:
+            update_params["status"] = str(args["status"])
+            status_text = "enabled" if args["status"] == 0 else "disabled"
+            changes.append(f"status → {status_text}")
+        
+        if "description" in args:
+            update_params["description"] = args["description"]
+            changes.append("description updated")
+        
+        if "group_ids" in args:
+            group_ids = args["group_ids"]
+            if isinstance(group_ids, str):
+                group_ids = [group_ids]
+            update_params["groups"] = [{"groupid": gid} for gid in group_ids]
+            changes.append(f"groups → {len(group_ids)} group(s)")
+        
+        if not changes:
+            return "❌ Error: at least one property (name, status, description, or group_ids) must be specified"
+        
+        result = client.call("host.update", update_params)
+        if not result:
+            return f"❌ Failed to update host {hostid}"
+        
+        return f"""✅ Host Updated Successfully!
+
+🖥️ Host ID: {hostid}
+📝 Changes: {', '.join(changes)}"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_enable_host(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle enable_host tool - Re-enable monitoring for a host."""
+    try:
+        hostid = args.get("hostid")
+        if not hostid:
+            return "❌ Error: hostid is required"
+        
+        result = client.call("host.update", {
+            "hostid": hostid,
+            "status": 0,  # 0 = enabled
+        })
+        
+        if not result:
+            return f"❌ Failed to enable host {hostid}"
+        
+        return f"""✅ Host Enabled!
+
+🖥️ Host ID: {hostid}
+📊 Status: Monitoring active
+🔄 Data collection: Resumed"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_disable_host(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle disable_host tool - Pause monitoring for a host."""
+    try:
+        hostid = args.get("hostid")
+        if not hostid:
+            return "❌ Error: hostid is required"
+        
+        result = client.call("host.update", {
+            "hostid": hostid,
+            "status": 1,  # 1 = disabled
+        })
+        
+        if not result:
+            return f"❌ Failed to disable host {hostid}"
+        
+        return f"""✅ Host Disabled!
+
+🖥️ Host ID: {hostid}
+📊 Status: Monitoring paused
+⚠️ Data collection: Stopped
+🔔 Alerts: Suppressed"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_delete_host(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle delete_host tool - Remove host from monitoring."""
+    try:
+        hostid = args.get("hostid")
+        if not hostid:
+            return "❌ Error: hostid is required"
+        
+        cascade = args.get("cascade", True)
+        
+        result = client.call("host.delete", [hostid])
+        
+        if not result:
+            return f"❌ Failed to delete host {hostid}"
+        
+        return f"""✅ Host Deleted!
+
+🖥️ Host ID: {hostid}
+⚠️ Status: Removed from monitoring
+📊 Data: {'Cascaded delete (all related data removed)' if cascade else 'Host record removed'}
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_update_host_interface(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle update_host_interface tool - Modify host interface config."""
+    try:
+        interfaceid = args.get("interfaceid")
+        if not interfaceid:
+            return "❌ Error: interfaceid is required"
+        
+        update_params = {"interfaceid": interfaceid}
+        changes = []
+        
+        if "ip_address" in args:
+            update_params["ip"] = args["ip_address"]
+            changes.append(f"IP → {args['ip_address']}")
+        
+        if "port" in args:
+            update_params["port"] = str(args["port"])
+            changes.append(f"port → {args['port']}")
+        
+        if "useip" in args:
+            update_params["useip"] = str(args["useip"])
+            useip_text = "IP" if args["useip"] == 1 else "DNS"
+            changes.append(f"mode → {useip_text}")
+        
+        if "dns" in args:
+            update_params["dns"] = args["dns"]
+            changes.append(f"DNS → {args['dns']}")
+        
+        if "bulk" in args:
+            update_params["bulk"] = str(args["bulk"])
+            bulk_text = "bulk" if args["bulk"] == 1 else "normal"
+            changes.append(f"bulk → {bulk_text}")
+        
+        if not changes:
+            return "❌ Error: at least one property (ip_address, port, useip, dns, or bulk) must be specified"
+        
+        result = client.call("hostinterface.update", update_params)
+        
+        if not result:
+            return f"❌ Failed to update interface {interfaceid}"
+        
+        return f"""✅ Interface Updated!
+
+🔗 Interface ID: {interfaceid}
+📝 Changes: {', '.join(changes)}
+⏱️ Effect: Next poll will use new config"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_delete_host_interface(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle delete_host_interface tool - Remove interface from host."""
+    try:
+        interfaceid = args.get("interfaceid")
+        if not interfaceid:
+            return "❌ Error: interfaceid is required"
+        
+        result = client.call("hostinterface.delete", [interfaceid])
+        
+        if not result:
+            return f"❌ Failed to delete interface {interfaceid}"
+        
+        return f"""✅ Interface Deleted!
+
+🔗 Interface ID: {interfaceid}
+⚠️ Status: Removed from host
+📊 Effect: Host may lose polling capability if this was the only interface
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
 # Tool handler registry
 TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "get_hosts": handle_get_hosts,
@@ -724,6 +992,13 @@ TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "add_host_interface": handle_add_host_interface,
     "sync_zabbix_sequences": handle_sync_zabbix_sequences,
     "create_maintenance_window": handle_create_maintenance_window,
+    # Phase 1A: Host Lifecycle
+    "update_host": handle_update_host,
+    "enable_host": handle_enable_host,
+    "disable_host": handle_disable_host,
+    "delete_host": handle_delete_host,
+    "update_host_interface": handle_update_host_interface,
+    "delete_host_interface": handle_delete_host_interface,
 }
 
 
