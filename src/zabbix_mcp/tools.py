@@ -152,6 +152,22 @@ TOOLS: List[Tool] = [
         description="Fix sequence table desynchronization (call this once after manual DB operations)",
         inputSchema={"type": "object", "properties": {}},
     ),
+    Tool(
+        name="create_maintenance_window",
+        description="Create a maintenance window for hosts to pause data collection and suppress alerts",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Maintenance window name (e.g., 'Nightly Maintenance')"},
+                "description": {"type": "string", "description": "Optional description"},
+                "hostids": {"type": "array", "items": {"type": "string"}, "description": "List of host IDs (e.g., ['10699', '10700'])"},
+                "start_time": {"type": "integer", "description": "Start time in seconds since midnight (e.g., 79200 for 22:00)"},
+                "duration_seconds": {"type": "integer", "description": "Duration in seconds (e.g., 28800 for 8 hours)"},
+                "recurring_daily": {"type": "boolean", "description": "If true, repeat daily. If false, one-time (default: true)"},
+            },
+            "required": ["name", "hostids", "start_time", "duration_seconds"],
+        },
+    ),
 ]
 
 
@@ -614,6 +630,80 @@ SELECT table_name, nextid FROM ids WHERE table_name IN ('hosts', 'interface', 'i
         return f"❌ Error: {e}"
 
 
+def handle_create_maintenance_window(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle create_maintenance_window tool - Create maintenance window for hosts."""
+    try:
+        name = args.get("name")
+        description = args.get("description", "")
+        hostids = args.get("hostids", [])
+        start_time = args.get("start_time")
+        duration_seconds = args.get("duration_seconds")
+        recurring_daily = args.get("recurring_daily", True)
+        
+        if not all([name, hostids, start_time is not None, duration_seconds is not None]):
+            return "❌ Error: name, hostids, start_time, and duration_seconds are required"
+        
+        # Convert hostids to proper format
+        if isinstance(hostids, str):
+            hostids = [hostids]
+        hostids = [str(h) for h in hostids]
+        
+        maintenance_params = {
+            "name": name,
+            "description": description,
+            "active_since": int(datetime.now().timestamp()),
+            "active_till": int(datetime.now().timestamp()) + (365 * 24 * 60 * 60),  # 1 year
+            "maintenance_type": 0,  # 0 = normal maintenance
+            "hostids": hostids,
+        }
+        
+        # Add timeperiod for recurring windows
+        if recurring_daily:
+            maintenance_params["timeperiods"] = [{
+                "timeperiod_type": 3,  # 3 = daily
+                "start_time": start_time,
+                "period": duration_seconds,
+                "dayofweek": 127,  # All days (binary: 1111111)
+                "every": 1,
+            }]
+        else:
+            # One-time maintenance (starts immediately, lasts duration_seconds)
+            maintenance_params["timeperiods"] = [{
+                "timeperiod_type": 0,  # 0 = one-time
+                "start_date": int(datetime.now().timestamp()),
+                "period": duration_seconds,
+            }]
+        
+        result = client.call("maintenance.create", maintenance_params)
+        
+        if not result:
+            return f"❌ Failed to create maintenance window '{name}'"
+        
+        maintenanceid = result[0] if isinstance(result, list) else result.get("maintenanceids", [None])[0]
+        
+        # Format time for display
+        hours = start_time // 3600
+        minutes = (start_time % 3600) // 60
+        duration_hours = duration_seconds // 3600
+        
+        schedule = f"{hours:02d}:{minutes:02d} for {duration_hours}h"
+        if recurring_daily:
+            schedule += " daily"
+        
+        return f"""✅ Maintenance Window Created!
+
+📋 Name: {name}
+🔗 ID: {maintenanceid}
+⏰ Schedule: {schedule}
+🖥️ Hosts: {len(hostids)} host(s)
+📝 Description: {description or '(none)'}
+🔄 Recurring: {'Yes (daily)' if recurring_daily else 'No (one-time)'}
+
+Effect: Data collection paused, alerts suppressed during window."""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
 # Tool handler registry
 TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "get_hosts": handle_get_hosts,
@@ -633,6 +723,7 @@ TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "create_host": handle_create_host,
     "add_host_interface": handle_add_host_interface,
     "sync_zabbix_sequences": handle_sync_zabbix_sequences,
+    "create_maintenance_window": handle_create_maintenance_window,
 }
 
 
