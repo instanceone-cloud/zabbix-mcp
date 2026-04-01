@@ -245,6 +245,93 @@ TOOLS: List[Tool] = [
             "required": ["interfaceid"],
         },
     ),
+    # Phase 1B: Problem & Trigger Management
+    Tool(
+        name="acknowledge_problem",
+        description="Acknowledge a problem alert. Mark as reviewed by operator.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "problemid": {"type": "string", "description": "Problem ID"},
+                "message": {"type": "string", "description": "Optional acknowledgement message/note"},
+            },
+            "required": ["problemid"],
+        },
+    ),
+    Tool(
+        name="update_problem_status",
+        description="Update problem state (mark as resolved or re-open)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "problemid": {"type": "string", "description": "Problem ID"},
+                "status": {"type": "string", "description": "Status: 0=problem (open), 1=resolved (closed)"},
+            },
+            "required": ["problemid", "status"],
+        },
+    ),
+    Tool(
+        name="update_trigger",
+        description="Update trigger configuration (expression, description, enabled status, etc.)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "triggerid": {"type": "string", "description": "Trigger ID"},
+                "expression": {"type": "string", "description": "Trigger expression (e.g., 'last(/host/key)>100')"},
+                "description": {"type": "string", "description": "Trigger description/title"},
+                "enabled": {"type": "string", "description": "Enable: 0=disabled, 1=enabled"},
+                "priority": {"type": "string", "description": "Severity: 0=Not classified, 1=Info, 2=Warning, 3=Average, 4=High, 5=Disaster"},
+                "manual_close": {"type": "string", "description": "Allow manual close: 0=no, 1=yes"},
+            },
+            "required": ["triggerid"],
+        },
+    ),
+    Tool(
+        name="enable_trigger",
+        description="Enable a trigger (start evaluating conditions and generating problems)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "triggerid": {"type": "string", "description": "Trigger ID"},
+            },
+            "required": ["triggerid"],
+        },
+    ),
+    Tool(
+        name="disable_trigger",
+        description="Disable a trigger (stop evaluating conditions, no new problems)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "triggerid": {"type": "string", "description": "Trigger ID"},
+            },
+            "required": ["triggerid"],
+        },
+    ),
+    Tool(
+        name="delete_trigger",
+        description="Delete a trigger. Removes associated problems and history.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "triggerid": {"type": "string", "description": "Trigger ID"},
+            },
+            "required": ["triggerid"],
+        },
+    ),
+    Tool(
+        name="acknowledge_event",
+        description="Acknowledge an event. Mark as seen/reviewed by operator.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "eventid": {"type": "string", "description": "Event ID"},
+                "message": {"type": "string", "description": "Optional acknowledgement message"},
+                "acknowledge": {"type": "string", "description": "Action: 0=unacknowledge, 1=acknowledge (default: 1)"},
+            },
+            "required": ["eventid"],
+        },
+    ),
 ]
 
 
@@ -972,6 +1059,230 @@ def handle_delete_host_interface(client: ZabbixClient, args: Dict[str, Any]) -> 
         return f"❌ Error: {e}"
 
 
+# Phase 1B: Problem & Trigger Management Handlers
+
+def handle_acknowledge_problem(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle acknowledge_problem tool - Mark problem as acknowledged."""
+    try:
+        problemid = args.get("problemid")
+        message = args.get("message", "")
+        
+        if not problemid:
+            return "❌ Error: problemid is required"
+        
+        ack_params = {
+            "action": 0,  # Acknowledge
+            "objectids": [problemid],
+        }
+        
+        if message:
+            ack_params["message"] = message
+        
+        result = client.call("acknowledges.create", ack_params)
+        
+        if not result:
+            return f"❌ Failed to acknowledge problem {problemid}"
+        
+        return f"""✅ Problem Acknowledged!
+
+⚠️ Problem ID: {problemid}
+📝 Message: {message or '(no message)'}
+👤 Status: Marked as reviewed
+⏰ Timestamp: Now"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_update_problem_status(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle update_problem_status tool - Change problem state."""
+    try:
+        problemid = args.get("problemid")
+        status = args.get("status")
+        
+        if not problemid or status is None:
+            return "❌ Error: problemid and status are required"
+        
+        # Status: 0 = problem (open), 1 = resolved (closed)
+        status_int = int(status)
+        status_text = "Resolved" if status_int == 1 else "Open"
+        
+        result = client.call("problem.update", {
+            "problemid": problemid,
+            "status": str(status_int),
+        })
+        
+        if not result:
+            return f"❌ Failed to update problem {problemid}"
+        
+        return f"""✅ Problem Status Updated!
+
+⚠️ Problem ID: {problemid}
+📊 New Status: {status_text}
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_update_trigger(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle update_trigger tool - Modify trigger configuration."""
+    try:
+        triggerid = args.get("triggerid")
+        if not triggerid:
+            return "❌ Error: triggerid is required"
+        
+        update_params = {"triggerid": triggerid}
+        changes = []
+        
+        if "expression" in args:
+            update_params["expression"] = args["expression"]
+            changes.append("expression updated")
+        
+        if "description" in args:
+            update_params["description"] = args["description"]
+            changes.append(f"description → {args['description'][:50]}")
+        
+        if "enabled" in args:
+            update_params["status"] = str(args["enabled"])
+            enabled_text = "enabled" if args["enabled"] == 1 else "disabled"
+            changes.append(f"status → {enabled_text}")
+        
+        if "priority" in args:
+            severity_map = {
+                "0": "Not classified", "1": "Info", "2": "Warning",
+                "3": "Average", "4": "High", "5": "Disaster"
+            }
+            update_params["priority"] = str(args["priority"])
+            changes.append(f"priority → {severity_map.get(str(args['priority']), 'Unknown')}")
+        
+        if "manual_close" in args:
+            update_params["manual_close"] = str(args["manual_close"])
+            manual_text = "allowed" if args["manual_close"] == 1 else "disabled"
+            changes.append(f"manual_close → {manual_text}")
+        
+        if not changes:
+            return "❌ Error: at least one property must be specified"
+        
+        result = client.call("trigger.update", update_params)
+        
+        if not result:
+            return f"❌ Failed to update trigger {triggerid}"
+        
+        return f"""✅ Trigger Updated!
+
+🔔 Trigger ID: {triggerid}
+📝 Changes: {', '.join(changes)}
+⏰ Effect: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_enable_trigger(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle enable_trigger tool - Turn on trigger evaluation."""
+    try:
+        triggerid = args.get("triggerid")
+        if not triggerid:
+            return "❌ Error: triggerid is required"
+        
+        result = client.call("trigger.update", {
+            "triggerid": triggerid,
+            "status": 0,  # 0 = enabled
+        })
+        
+        if not result:
+            return f"❌ Failed to enable trigger {triggerid}"
+        
+        return f"""✅ Trigger Enabled!
+
+🔔 Trigger ID: {triggerid}
+📊 Status: Active
+⚡ Evaluation: Started
+🚨 Problems: Will be generated on match"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_disable_trigger(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle disable_trigger tool - Turn off trigger evaluation."""
+    try:
+        triggerid = args.get("triggerid")
+        if not triggerid:
+            return "❌ Error: triggerid is required"
+        
+        result = client.call("trigger.update", {
+            "triggerid": triggerid,
+            "status": 1,  # 1 = disabled
+        })
+        
+        if not result:
+            return f"❌ Failed to disable trigger {triggerid}"
+        
+        return f"""✅ Trigger Disabled!
+
+🔔 Trigger ID: {triggerid}
+📊 Status: Inactive
+⚡ Evaluation: Stopped
+🔇 Problems: Will NOT be generated"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_delete_trigger(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle delete_trigger tool - Remove trigger."""
+    try:
+        triggerid = args.get("triggerid")
+        if not triggerid:
+            return "❌ Error: triggerid is required"
+        
+        result = client.call("trigger.delete", [triggerid])
+        
+        if not result:
+            return f"❌ Failed to delete trigger {triggerid}"
+        
+        return f"""✅ Trigger Deleted!
+
+🔔 Trigger ID: {triggerid}
+⚠️ Status: Removed
+📊 Data: All associated problems and history removed
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_acknowledge_event(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle acknowledge_event tool - Acknowledge event."""
+    try:
+        eventid = args.get("eventid")
+        message = args.get("message", "")
+        acknowledge = args.get("acknowledge", 1)
+        
+        if not eventid:
+            return "❌ Error: eventid is required"
+        
+        ack_params = {
+            "objectids": [eventid],
+            "action": int(acknowledge),  # 0 = unacknowledge, 1 = acknowledge
+        }
+        
+        if message:
+            ack_params["message"] = message
+        
+        result = client.call("acknowledges.create", ack_params)
+        
+        if not result:
+            return f"❌ Failed to acknowledge event {eventid}"
+        
+        action_text = "Acknowledged" if acknowledge == 1 else "Unacknowledged"
+        
+        return f"""✅ Event {action_text}!
+
+📅 Event ID: {eventid}
+📝 Message: {message or '(no message)'}
+👤 Status: Updated
+⏰ Timestamp: Now"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
 # Tool handler registry
 TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "get_hosts": handle_get_hosts,
@@ -999,6 +1310,14 @@ TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "delete_host": handle_delete_host,
     "update_host_interface": handle_update_host_interface,
     "delete_host_interface": handle_delete_host_interface,
+    # Phase 1B: Problem & Trigger Management
+    "acknowledge_problem": handle_acknowledge_problem,
+    "update_problem_status": handle_update_problem_status,
+    "update_trigger": handle_update_trigger,
+    "enable_trigger": handle_enable_trigger,
+    "disable_trigger": handle_disable_trigger,
+    "delete_trigger": handle_delete_trigger,
+    "acknowledge_event": handle_acknowledge_event,
 }
 
 
