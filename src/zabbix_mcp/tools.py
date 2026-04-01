@@ -459,6 +459,118 @@ TOOLS: List[Tool] = [
             "required": ["name"],
         },
     ),
+    # Phase 3A: Role Management
+    Tool(
+        name="create_role",
+        description="Create a new Zabbix role with specific permissions",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Role name (e.g., 'Monitoring Read-Only')"},
+                "type": {"type": "string", "description": "Role type: 1=User role, 2=Admin role, 3=Super admin role"},
+                "description": {"type": "string", "description": "Role description"},
+            },
+            "required": ["name", "type"],
+        },
+    ),
+    Tool(
+        name="update_role",
+        description="Update role properties (name, description, permissions)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "roleid": {"type": "string", "description": "Role ID"},
+                "name": {"type": "string", "description": "New role name (optional)"},
+                "description": {"type": "string", "description": "New description (optional)"},
+            },
+            "required": ["roleid"],
+        },
+    ),
+    Tool(
+        name="delete_role",
+        description="Delete a custom role. Cannot delete built-in roles.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "roleid": {"type": "string", "description": "Role ID to delete"},
+            },
+            "required": ["roleid"],
+        },
+    ),
+    # Phase 3B: User Management
+    Tool(
+        name="delete_user",
+        description="Delete a Zabbix user account",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "userid": {"type": "string", "description": "User ID to delete"},
+            },
+            "required": ["userid"],
+        },
+    ),
+    # Phase 3C: Host Group Management
+    Tool(
+        name="update_host_group",
+        description="Update host group properties (name, description)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "groupid": {"type": "string", "description": "Host group ID"},
+                "name": {"type": "string", "description": "New group name (optional)"},
+                "description": {"type": "string", "description": "New description (optional)"},
+            },
+            "required": ["groupid"],
+        },
+    ),
+    Tool(
+        name="delete_host_group",
+        description="Delete a host group. Cannot delete if hosts assigned.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "groupid": {"type": "string", "description": "Host group ID to delete"},
+            },
+            "required": ["groupid"],
+        },
+    ),
+    # Phase 3D: Maintenance Window Management
+    Tool(
+        name="get_maintenance_windows",
+        description="List all maintenance windows with optional filtering",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max results (default: 50)"},
+            },
+        },
+    ),
+    Tool(
+        name="update_maintenance_window",
+        description="Update maintenance window schedule or hosts",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "maintenanceid": {"type": "string", "description": "Maintenance window ID"},
+                "name": {"type": "string", "description": "New name (optional)"},
+                "description": {"type": "string", "description": "New description (optional)"},
+                "active_since": {"type": "string", "description": "New start timestamp (optional)"},
+                "active_till": {"type": "string", "description": "New end timestamp (optional)"},
+            },
+            "required": ["maintenanceid"],
+        },
+    ),
+    Tool(
+        name="delete_maintenance_window",
+        description="Delete a maintenance window",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "maintenanceid": {"type": "string", "description": "Maintenance window ID to delete"},
+            },
+            "required": ["maintenanceid"],
+        },
+    ),
 ]
 
 
@@ -1761,6 +1873,280 @@ Next: Assign hosts to this group with update_host"""
         return f"❌ Error: {e}"
 
 
+# Phase 3A: Role Management Handlers
+
+def handle_create_role(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle create_role tool - Create new Zabbix role."""
+    try:
+        name = args.get("name")
+        type_ = args.get("type")
+        description = args.get("description", "")
+        
+        if not name or type_ is None:
+            return "❌ Error: name and type are required"
+        
+        role_params = {
+            "name": name,
+            "type": str(type_),
+        }
+        if description:
+            role_params["description"] = description
+        
+        result = client.call("role.create", role_params)
+        
+        if not result:
+            return f"❌ Failed to create role '{name}'"
+        
+        roleid = result[0] if isinstance(result, list) else result.get("roleids", [None])[0]
+        
+        type_map = {"1": "User", "2": "Admin", "3": "Super Admin"}
+        type_text = type_map.get(str(type_), "Unknown")
+        
+        return f"""✅ Role Created!
+
+👤 Role ID: {roleid}
+📝 Name: {name}
+📋 Type: {type_text}
+📖 Description: {description or '(none)'}
+
+Next: Assign permissions via Zabbix UI or assign to users"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_update_role(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle update_role tool - Modify role properties."""
+    try:
+        roleid = args.get("roleid")
+        if not roleid:
+            return "❌ Error: roleid is required"
+        
+        update_params = {"roleid": roleid}
+        changes = []
+        
+        if "name" in args:
+            update_params["name"] = args["name"]
+            changes.append(f"name → {args['name']}")
+        
+        if "description" in args:
+            update_params["description"] = args["description"]
+            changes.append("description updated")
+        
+        if not changes:
+            return "❌ Error: at least one property (name or description) must be specified"
+        
+        result = client.call("role.update", update_params)
+        
+        if not result:
+            return f"❌ Failed to update role {roleid}"
+        
+        return f"""✅ Role Updated!
+
+👤 Role ID: {roleid}
+📝 Changes: {', '.join(changes)}"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_delete_role(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle delete_role tool - Remove custom role."""
+    try:
+        roleid = args.get("roleid")
+        if not roleid:
+            return "❌ Error: roleid is required"
+        
+        result = client.call("role.delete", [roleid])
+        
+        if not result:
+            return f"❌ Failed to delete role {roleid} (may be built-in or in use)"
+        
+        return f"""✅ Role Deleted!
+
+👤 Role ID: {roleid}
+⚠️ Status: Removed from system
+🔗 Users: Automatically reassigned to default role
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+# Phase 3B: User Management Handlers
+
+def handle_delete_user(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle delete_user tool - Remove user account."""
+    try:
+        userid = args.get("userid")
+        if not userid:
+            return "❌ Error: userid is required"
+        
+        result = client.call("user.delete", [userid])
+        
+        if not result:
+            return f"❌ Failed to delete user {userid}"
+        
+        return f"""✅ User Deleted!
+
+👤 User ID: {userid}
+⚠️ Status: Account removed
+📝 Data: User history retained
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+# Phase 3C: Host Group Management Handlers
+
+def handle_update_host_group(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle update_host_group tool - Modify host group properties."""
+    try:
+        groupid = args.get("groupid")
+        if not groupid:
+            return "❌ Error: groupid is required"
+        
+        update_params = {"groupid": groupid}
+        changes = []
+        
+        if "name" in args:
+            update_params["name"] = args["name"]
+            changes.append(f"name → {args['name']}")
+        
+        if "description" in args:
+            update_params["description"] = args["description"]
+            changes.append("description updated")
+        
+        if not changes:
+            return "❌ Error: at least one property (name or description) must be specified"
+        
+        result = client.call("hostgroup.update", update_params)
+        
+        if not result:
+            return f"❌ Failed to update host group {groupid}"
+        
+        return f"""✅ Host Group Updated!
+
+👥 Group ID: {groupid}
+📝 Changes: {', '.join(changes)}"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_delete_host_group(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle delete_host_group tool - Remove host group."""
+    try:
+        groupid = args.get("groupid")
+        if not groupid:
+            return "❌ Error: groupid is required"
+        
+        result = client.call("hostgroup.delete", [groupid])
+        
+        if not result:
+            return f"❌ Failed to delete host group {groupid} (may have hosts assigned)"
+        
+        return f"""✅ Host Group Deleted!
+
+👥 Group ID: {groupid}
+⚠️ Status: Removed from system
+🖥️ Hosts: Must be reassigned before deletion
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+# Phase 3D: Maintenance Window Management Handlers
+
+def handle_get_maintenance_windows(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle get_maintenance_windows tool - List maintenance windows."""
+    try:
+        limit = args.get("limit", 50)
+        
+        windows = client.call("maintenance.get", {
+            "output": ["maintenanceid", "name", "description", "active_since", "active_till"],
+            "limit": limit,
+        })
+        
+        if not windows:
+            return "✅ No maintenance windows found"
+        
+        result = f"📋 Maintenance Windows ({len(windows)}):\n\n"
+        for window in windows[:20]:
+            from datetime import datetime
+            start = datetime.fromtimestamp(int(window.get("active_since", 0))).strftime("%Y-%m-%d %H:%M")
+            end = datetime.fromtimestamp(int(window.get("active_till", 0))).strftime("%Y-%m-%d %H:%M")
+            result += f"📅 {window.get('name', 'Unknown')} (ID: {window.get('maintenanceid')})\n"
+            result += f"   Period: {start} → {end}\n"
+        
+        if len(windows) > 20:
+            result += f"\n... and {len(windows) - 20} more"
+        
+        return result
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_update_maintenance_window(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle update_maintenance_window tool - Modify maintenance window."""
+    try:
+        maintenanceid = args.get("maintenanceid")
+        if not maintenanceid:
+            return "❌ Error: maintenanceid is required"
+        
+        update_params = {"maintenanceid": maintenanceid}
+        changes = []
+        
+        if "name" in args:
+            update_params["name"] = args["name"]
+            changes.append(f"name → {args['name']}")
+        
+        if "description" in args:
+            update_params["description"] = args["description"]
+            changes.append("description updated")
+        
+        if "active_since" in args:
+            update_params["active_since"] = str(args["active_since"])
+            changes.append("start time updated")
+        
+        if "active_till" in args:
+            update_params["active_till"] = str(args["active_till"])
+            changes.append("end time updated")
+        
+        if not changes:
+            return "❌ Error: at least one property must be specified"
+        
+        result = client.call("maintenance.update", update_params)
+        
+        if not result:
+            return f"❌ Failed to update maintenance window {maintenanceid}"
+        
+        return f"""✅ Maintenance Window Updated!
+
+📅 Window ID: {maintenanceid}
+📝 Changes: {', '.join(changes)}"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
+def handle_delete_maintenance_window(client: ZabbixClient, args: Dict[str, Any]) -> str:
+    """Handle delete_maintenance_window tool - Remove maintenance window."""
+    try:
+        maintenanceid = args.get("maintenanceid")
+        if not maintenanceid:
+            return "❌ Error: maintenanceid is required"
+        
+        result = client.call("maintenance.delete", [maintenanceid])
+        
+        if not result:
+            return f"❌ Failed to delete maintenance window {maintenanceid}"
+        
+        return f"""✅ Maintenance Window Deleted!
+
+📅 Window ID: {maintenanceid}
+⚠️ Status: Removed
+🔔 Alerts: Will resume for affected hosts
+⏰ Action: Immediate"""
+    except Exception as e:
+        return f"❌ Error: {e}"
+
+
 # Tool handler registry
 TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "get_hosts": handle_get_hosts,
@@ -1809,6 +2195,19 @@ TOOL_HANDLERS: Dict[str, Callable[[ZabbixClient, Dict[str, Any]], str]] = {
     "link_multiple_templates": handle_link_multiple_templates,
     # Phase 2D: Host Groups
     "create_host_group": handle_create_host_group,
+    # Phase 3A: Roles
+    "create_role": handle_create_role,
+    "update_role": handle_update_role,
+    "delete_role": handle_delete_role,
+    # Phase 3B: Users
+    "delete_user": handle_delete_user,
+    # Phase 3C: Host Groups (update/delete)
+    "update_host_group": handle_update_host_group,
+    "delete_host_group": handle_delete_host_group,
+    # Phase 3D: Maintenance Windows
+    "get_maintenance_windows": handle_get_maintenance_windows,
+    "update_maintenance_window": handle_update_maintenance_window,
+    "delete_maintenance_window": handle_delete_maintenance_window,
 }
 
 
