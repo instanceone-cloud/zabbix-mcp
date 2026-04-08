@@ -176,13 +176,32 @@ class ZabbixClient:
         return self.call("event.get", params)
     
     def get_problems(self, **kwargs) -> List[Dict[str, Any]]:
-        """Get active problems."""
+        """Get active problems with associated host information."""
         params = {
             "output": "extend",
             "recent": True,
         }
         params.update(kwargs)
-        return self.call("problem.get", params)
+        problems = self.call("problem.get", params)
+
+        # Fetch triggers to get host information
+        if problems:
+            trigger_ids = [p.get("objectid") for p in problems if p.get("source") == "0"]
+            if trigger_ids:
+                triggers = self.call("trigger.get", {
+                    "output": "extend",
+                    "triggerids": trigger_ids,
+                    "selectHosts": "extend"
+                })
+                # Create a map of triggerid -> hosts
+                trigger_hosts_map = {t.get("triggerid"): t.get("hosts", []) for t in triggers}
+
+                # Merge hosts into problems
+                for problem in problems:
+                    if problem.get("source") == "0":
+                        problem["hosts"] = trigger_hosts_map.get(problem.get("objectid"), [])
+
+        return problems
     
     def get_items(self, hostid: Optional[str] = None, **kwargs) -> List[Dict[str, Any]]:
         """Get items, optionally filtered by host."""
