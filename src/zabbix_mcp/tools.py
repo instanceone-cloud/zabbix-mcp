@@ -249,12 +249,13 @@ TOOLS: List[Tool] = [
     # Phase 1B: Problem & Trigger Management
     Tool(
         name="acknowledge_problem",
-        description="Acknowledge a problem alert. Mark as reviewed by operator.",
+        description="Acknowledge or close a problem alert. Mark as reviewed and optionally resolve.",
         inputSchema={
             "type": "object",
             "properties": {
-                "problemid": {"type": "string", "description": "Problem ID"},
-                "message": {"type": "string", "description": "Optional acknowledgement message/note"},
+                "problemid": {"type": "string", "description": "Problem ID or Event ID"},
+                "message": {"type": "string", "description": "Optional acknowledgement/closure message/note"},
+                "close": {"type": "boolean", "description": "If true, close/resolve the problem (default: false)"},
             },
             "required": ["problemid"],
         },
@@ -322,13 +323,13 @@ TOOLS: List[Tool] = [
     ),
     Tool(
         name="acknowledge_event",
-        description="Acknowledge an event. Mark as seen/reviewed by operator.",
+        description="Acknowledge or close an event. Mark as seen/reviewed or resolve it.",
         inputSchema={
             "type": "object",
             "properties": {
                 "eventid": {"type": "string", "description": "Event ID"},
-                "message": {"type": "string", "description": "Optional acknowledgement message"},
-                "acknowledge": {"type": "string", "description": "Action: 0=unacknowledge, 1=acknowledge (default: 1)"},
+                "message": {"type": "string", "description": "Optional acknowledgement/closure message"},
+                "close": {"type": "boolean", "description": "If true, close/resolve the event (action=2). If false, just acknowledge (action=0). (default: false)"},
             },
             "required": ["eventid"],
         },
@@ -1317,18 +1318,22 @@ def handle_delete_host_interface(client: ZabbixClient, args: Dict[str, Any]) -> 
 # Phase 1B: Problem & Trigger Management Handlers
 
 def handle_acknowledge_problem(client: ZabbixClient, args: Dict[str, Any]) -> str:
-    """Handle acknowledge_problem tool - Mark problem as acknowledged."""
+    """Handle acknowledge_problem tool - Mark problem as acknowledged or closed."""
     try:
         eventid = args.get("problemid")  # Can also accept eventid directly
         if not eventid:
             eventid = args.get("eventid")
         message = args.get("message", "")
+        close = args.get("close", False)
 
         if not eventid:
             return "❌ Error: problemid or eventid is required"
 
+        # Action: 0 = acknowledge, 2 = close
+        action = 2 if close else 0
+
         ack_params = {
-            "action": 0,  # Acknowledge
+            "action": action,
             "eventids": [eventid],
         }
 
@@ -1338,13 +1343,14 @@ def handle_acknowledge_problem(client: ZabbixClient, args: Dict[str, Any]) -> st
         result = client.call("event.acknowledge", ack_params)
 
         if not result:
-            return f"❌ Failed to acknowledge event {eventid}"
+            return f"❌ Failed to process event {eventid}"
 
-        return f"""✅ Event Acknowledged!
+        status_text = "CLOSED" if close else "Acknowledged"
+        return f"""✅ Event {status_text}!
 
 ⚠️ Event ID: {eventid}
 📝 Message: {message or '(no message)'}
-👤 Status: Marked as reviewed
+👤 Status: {status_text}
 ⏰ Timestamp: Now"""
     except Exception as e:
         return f"❌ Error: {e}"
@@ -1506,18 +1512,21 @@ def handle_delete_trigger(client: ZabbixClient, args: Dict[str, Any]) -> str:
 
 
 def handle_acknowledge_event(client: ZabbixClient, args: Dict[str, Any]) -> str:
-    """Handle acknowledge_event tool - Acknowledge event."""
+    """Handle acknowledge_event tool - Acknowledge or close an event."""
     try:
         eventid = args.get("eventid")
         message = args.get("message", "")
-        acknowledge = args.get("acknowledge", 0)  # 0 = acknowledge, 1 = unacknowledge
+        close = args.get("close", False)
 
         if not eventid:
             return "❌ Error: eventid is required"
 
+        # Action: 0 = acknowledge, 2 = close
+        action = 2 if close else 0
+
         ack_params = {
             "eventids": [eventid],
-            "action": int(acknowledge),  # 0 = acknowledge, 1 = unacknowledge
+            "action": action,
         }
 
         if message:
@@ -1526,15 +1535,15 @@ def handle_acknowledge_event(client: ZabbixClient, args: Dict[str, Any]) -> str:
         result = client.call("event.acknowledge", ack_params)
 
         if not result:
-            return f"❌ Failed to acknowledge event {eventid}"
+            return f"❌ Failed to process event {eventid}"
 
-        action_text = "Acknowledged" if acknowledge == 0 else "Unacknowledged"
+        action_text = "CLOSED" if close else "Acknowledged"
 
         return f"""✅ Event {action_text}!
 
 📅 Event ID: {eventid}
 📝 Message: {message or '(no message)'}
-👤 Status: Updated
+👤 Status: {action_text}
 ⏰ Timestamp: Now"""
     except Exception as e:
         return f"❌ Error: {e}"
