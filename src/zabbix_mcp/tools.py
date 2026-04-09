@@ -1319,28 +1319,30 @@ def handle_delete_host_interface(client: ZabbixClient, args: Dict[str, Any]) -> 
 def handle_acknowledge_problem(client: ZabbixClient, args: Dict[str, Any]) -> str:
     """Handle acknowledge_problem tool - Mark problem as acknowledged."""
     try:
-        problemid = args.get("problemid")
+        eventid = args.get("problemid")  # Can also accept eventid directly
+        if not eventid:
+            eventid = args.get("eventid")
         message = args.get("message", "")
-        
-        if not problemid:
-            return "❌ Error: problemid is required"
-        
+
+        if not eventid:
+            return "❌ Error: problemid or eventid is required"
+
         ack_params = {
             "action": 0,  # Acknowledge
-            "objectids": [problemid],
+            "eventids": [eventid],
         }
-        
+
         if message:
             ack_params["message"] = message
-        
-        result = client.call("acknowledges.create", ack_params)
-        
-        if not result:
-            return f"❌ Failed to acknowledge problem {problemid}"
-        
-        return f"""✅ Problem Acknowledged!
 
-⚠️ Problem ID: {problemid}
+        result = client.call("event.acknowledge", ack_params)
+
+        if not result:
+            return f"❌ Failed to acknowledge event {eventid}"
+
+        return f"""✅ Event Acknowledged!
+
+⚠️ Event ID: {eventid}
 📝 Message: {message or '(no message)'}
 👤 Status: Marked as reviewed
 ⏰ Timestamp: Now"""
@@ -1508,26 +1510,26 @@ def handle_acknowledge_event(client: ZabbixClient, args: Dict[str, Any]) -> str:
     try:
         eventid = args.get("eventid")
         message = args.get("message", "")
-        acknowledge = args.get("acknowledge", 1)
-        
+        acknowledge = args.get("acknowledge", 0)  # 0 = acknowledge, 1 = unacknowledge
+
         if not eventid:
             return "❌ Error: eventid is required"
-        
+
         ack_params = {
-            "objectids": [eventid],
-            "action": int(acknowledge),  # 0 = unacknowledge, 1 = acknowledge
+            "eventids": [eventid],
+            "action": int(acknowledge),  # 0 = acknowledge, 1 = unacknowledge
         }
-        
+
         if message:
             ack_params["message"] = message
-        
-        result = client.call("acknowledges.create", ack_params)
-        
+
+        result = client.call("event.acknowledge", ack_params)
+
         if not result:
             return f"❌ Failed to acknowledge event {eventid}"
-        
-        action_text = "Acknowledged" if acknowledge == 1 else "Unacknowledged"
-        
+
+        action_text = "Acknowledged" if acknowledge == 0 else "Unacknowledged"
+
         return f"""✅ Event {action_text}!
 
 📅 Event ID: {eventid}
